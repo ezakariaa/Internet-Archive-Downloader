@@ -59,10 +59,7 @@ export default function Home() {
   const [files, setFiles] = useState<any[]>([]);
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
-  const [showZipNameInput, setShowZipNameInput] = useState(false);
-  const [zipName, setZipName] = useState('downloaded-files');
 
   const fetchExtensions = async () => {
     if (!url) return;
@@ -72,17 +69,33 @@ export default function Home() {
     setFiles([]);
     setSelectedExtensions([]);
     try {
-      const response = await fetch('/api/fetch-extensions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
+      const match = url.match(/archive\.org\/details\/([^/?]+)/);
+      if (!match) throw new Error('URL invalide');
+      const identifier = match[1];
+      const response = await fetch(`https://archive.org/metadata/${identifier}`);
+      if (!response.ok) throw new Error('Impossible de récupérer les métadonnées');
       const data = await response.json();
-      setExtensions(data.extensions);
-      setExtensionCounts(data.extensionCounts || {});
-      setFiles(data.files);
-    } catch {
-      setError("Impossible de récupérer les fichiers. Vérifiez l'URL et réessayez.");
+      const files = data.files || [];
+      const extensions = Array.from(new Set(files.map((file: any): string => {
+        const name = file.name;
+        const ext = name.split('.').pop();
+        return ext ? `.${ext}` : '';
+      }).filter((ext: string) => ext))) as string[];
+      const extensionCounts = extensions.reduce<Record<string, number>>((acc, ext) => {
+        const key = String(ext);
+        acc[key] = files.filter((file: any) => file.name.endsWith(key)).length;
+        return acc;
+      }, {});
+      const fileList = files.map((file: any) => ({
+        name: file.name,
+        size: file.size,
+        url: `https://archive.org/download/${identifier}/${file.name}`,
+      }));
+      setExtensions(extensions);
+      setExtensionCounts(extensionCounts);
+      setFiles(fileList);
+    } catch (err: any) {
+      setError(err.message || "Erreur lors de l'analyse");
     }
     setLoading(false);
   };
@@ -99,51 +112,12 @@ export default function Home() {
   });
 
   const downloadFile = async (file: any) => {
-    try {
-      const proxyUrl = `/api/proxy?fileUrl=${encodeURIComponent(file.url)}`;
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const blob = await response.blob();
-      const dlUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = dlUrl;
-      a.download = file.name;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(dlUrl);
-      document.body.removeChild(a);
-    } catch (err: any) {
-      alert(`Impossible de télécharger ${file.name} : ${err.message}`);
-    }
-  };
-
-  const downloadAllAsZip = async () => {
-    if (selectedExtensions.length === 0) return;
-    setDownloading(true);
-    setShowZipNameInput(false);
-    try {
-      const response = await fetch('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, selectedExtensions }),
-      });
-      if (response.ok) {
-        const blob = await response.blob();
-        const dlUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = dlUrl;
-        a.download = `${zipName.trim() || 'downloaded-files'}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(dlUrl);
-        document.body.removeChild(a);
-      } else {
-        alert('Échec du téléchargement');
-      }
-    } catch {
-      alert('Échec du téléchargement');
-    }
-    setDownloading(false);
+    const a = document.createElement('a');
+    a.href = file.url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const totalSelectedSize = selectedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
@@ -257,46 +231,6 @@ export default function Home() {
                   {formatSize(totalSelectedSize)}
                 </p>
               </div>
-              {showZipNameInput ? (
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <i className="bi bi-pencil absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none" />
-                    <input
-                      autoFocus
-                      type="text"
-                      value={zipName}
-                      onChange={(e) => setZipName(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && downloadAllAsZip()}
-                      placeholder="Nom du fichier ZIP"
-                      className="bg-gray-50 border border-gray-300 rounded-xl pl-8 pr-3 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-emerald-500 w-52 transition-all"
-                    />
-                  </div>
-                  <button
-                    onClick={downloadAllAsZip}
-                    disabled={downloading}
-                    className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-md shadow-emerald-500/20 flex items-center gap-2 whitespace-nowrap"
-                  >
-                    {downloading
-                      ? <><i className="bi bi-arrow-repeat animate-spin" /> Téléchargement...</>
-                      : <><i className="bi bi-download" /> Confirmer</>}
-                  </button>
-                  <button
-                    onClick={() => setShowZipNameInput(false)}
-                    className="text-gray-400 hover:text-gray-600 px-2 py-2.5 rounded-xl transition-colors"
-                    title="Annuler"
-                  >
-                    <i className="bi bi-x-lg" />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowZipNameInput(true)}
-                  disabled={downloading}
-                  className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-md shadow-emerald-500/20 flex items-center gap-2"
-                >
-                  <i className="bi bi-file-earmark-zip" /> Tout en ZIP
-                </button>
-              )}
             </div>
 
             <div className="divide-y divide-gray-100 max-h-[480px] overflow-y-auto">
